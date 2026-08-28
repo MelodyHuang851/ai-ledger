@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 记账 · 一句话记账</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f6f7f9; color: #1a1a2e; padding: 24px 16px 60px; }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 22px; font-weight: 600; margin-bottom: 4px; }
+  .sub { color: #7a7a8c; font-size: 13px; margin-bottom: 20px; }
+
+  .card { background: #fff; border-radius: 14px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  .input-row { display: flex; gap: 10px; }
+  #ipt { flex: 1; font-size: 16px; padding: 12px 14px; border: 2px solid #e4e4ec; border-radius: 10px; outline: none; transition: border .15s; }
+  #ipt:focus { border-color: #534ab7; }
+  #btn { padding: 12px 22px; background: #534ab7; color: #fff; border: none; border-radius: 10px; font-size: 15px; cursor: pointer; }
+  #btn:disabled { background: #b9b9d6; cursor: wait; }
+  .hint { font-size: 12px; color: #a0a0b2; margin-top: 8px; }
+
+  .feedback-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; border-radius: 10px; margin-top: 10px; font-size: 14px; }
+  .fb-green { background: #e8f7ef; color: #0f6e56; }
+  .fb-amber { background: #fdf3e3; color: #854f0b; }
+  .fb-red { background: #fdecec; color: #a32d2d; }
+  .fb-left b { font-size: 18px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+  .budget-card { background: #fff; border-radius: 12px; padding: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  .budget-card .top { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 8px; }
+  .budget-card .top .cat { font-weight: 600; }
+  .bar { height: 8px; background: #eef0f4; border-radius: 4px; overflow: hidden; }
+  .bar > div { height: 100%; border-radius: 4px; transition: width .4s; }
+  .bar-green { background: #1d9e75; } .bar-amber { background: #ef9f27; } .bar-red { background: #e24b4a; }
+  .budget-card .num { font-size: 12px; color: #7a7a8c; margin-top: 6px; }
+  .budget-card .num b { color: #1a1a2e; }
+  .edit-budget { border: 1px solid #e4e4ec; border-radius: 6px; width: 56px; font-size: 12px; padding: 2px 4px; text-align: right; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; color: #7a7a8c; font-weight: 500; font-size: 12px; padding: 8px 6px; border-bottom: 1px solid #eef0f4; }
+  td { padding: 10px 6px; border-bottom: 1px solid #f4f5f8; }
+  .amount { font-weight: 600; }
+  .del { color: #c3c3cf; cursor: pointer; background: none; border: none; font-size: 14px; }
+  .del:hover { color: #e24b4a; }
+  .empty { text-align: center; color: #a0a0b2; padding: 30px 0; font-size: 13px; }
+  #month { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+  .chart-box { height: 260px; }
+  .section-title { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>AI 记账</h1>
+  <div class="sub">说一句话就记完 —— 解析由 GLM 完成，算账和预算由本地完成</div>
+
+  <div class="card">
+    <div class="input-row">
+      <input id="ipt" placeholder='试试："午饭35 打车42" 或 "昨天买书 89"' autocomplete="off">
+      <button id="btn" onclick="record()">记一笔</button>
+    </div>
+    <div class="hint">支持多笔、口语化金额、"昨天/前天"，也支持自然语言提问</div>
+    <div id="feedback"></div>
+  </div>
+
+  <div class="section-title">本月预算红绿灯</div>
+  <div class="grid" id="budgets"></div>
+
+  <div style="margin-top: 16px" class="card">
+    <div id="month"></div>
+    <div class="chart-box"><canvas id="chart"></canvas></div>
+  </div>
+
+  <div class="card">
+    <div class="section-title">本月流水</div>
+    <table>
+      <thead><tr><th>日期</th><th>类目</th><th>备注</th><th style="text-align:right">金额</th><th></th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div class="empty" id="empty" style="display:none">还没有记录，先在上面记一笔试试</div>
+  </div>
+</div>
+
+<script>
+// 防呆：如果用户直接双击 HTML 文件（file:// 方式）打开，给出明确指引而不是报错
+if (location.protocol === "file:") {
+  document.body.innerHTML = '<div style="max-width:560px;margin:80px auto;padding:32px;background:#fff;border-radius:14px;box-shadow:0 1px 3px rgba(0,0,0,.08);text-align:center;font-family:\'Microsoft YaHei\',sans-serif">'
+    + '<div style="font-size:40px">⚠️</div>'
+    + '<h2 style="margin:16px 0 8px;font-size:20px;color:#1a1a2e">打开方式不对</h2>'
+    + '<p style="color:#7a7a8c;font-size:14px;line-height:1.8">你是直接双击了 HTML 文件，这种方式无法连接后端服务。<br>请按下面两步操作：</p>'
+    + '<div style="background:#f6f7f9;border-radius:10px;padding:14px;margin:16px 0;font-size:14px;line-height:2;text-align:left;color:#1a1a2e">'
+    + '1️⃣ 双击 D 盘的 <b>ai-ledger</b> 文件夹里的 <b>启动记账.bat</b><br>'
+    + '2️⃣ 等浏览器自动打开 <b>http://localhost:3456</b> 即可使用</div>'
+    + '<p style="color:#a0a0b2;font-size:12px">（记住：永远不要直接双击 index.html）</p></div>';
+  throw new Error("opened via file:// protocol");
+}
+
+let chart = null;
+const CAT_COLORS = {"餐饮":"#e24b4a","交通":"#185fa5","购物":"#534ab7","娱乐":"#d4537e","居住":"#0f6e56","医疗":"#ef9f27","学习":"#3b6d11","其他":"#888780"};
+
+async function record() {
+  const ipt = document.getElementById("ipt"), btn = document.getElementById("btn");
+  const text = ipt.value.trim();
+  if (!text) return;
+  btn.disabled = true; btn.textContent = "解析中…";
+  try {
+    const res = await fetch("/api/record", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ text }) });
+    const j = await res.json();
+    if (j.error) { alert("出错了：" + j.error); return; }
+    if (j.type !== "ok") { alert("这句看起来不是记账哦，换个说法试试，比如「午饭35」"); return; }
+    showFeedback(j.feedback);
+    ipt.value = "";
+    loadState();
+  } catch (e) { alert("请求失败：" + e.message); }
+  finally { btn.disabled = false; btn.textContent = "记一笔"; }
+}
+
+function showFeedback(items) {
+  const box = document.getElementById("feedback");
+  box.innerHTML = items.map(f => {
+    const unit = f.note ? "「" + f.note + "」" : "同类消费";
+    const canBuy = f.level === "red" ? "已超支 ¥" + Math.abs(f.budgetLeft).toFixed(0) : "还能" + (f.stillCanBuy > 0 ? "再来 " + f.stillCanBuy + " 次" : "撑到月底");
+    return `<div class="feedback-item fb-${f.level}">
+      <div>✅ ${f.category} ¥${f.amount.toFixed(0)} <span style="opacity:.7">${f.note || ""} · ${f.tip}</span></div>
+      <div class="fb-left" style="text-align:right"><b>剩 ¥${f.budgetLeft.toFixed(0)}</b><div style="font-size:12px;opacity:.8">${canBuy}</div></div>
+    </div>`;
+  }).join("");
+}
+
+async function loadState() {
+  const j = await (await fetch("/api/state")).json();
+  document.getElementById("month").textContent = j.month.replace("-", " 年 ") + " 月 · 各类目支出";
+  const grid = document.getElementById("budgets");
+  grid.innerHTML = "";
+  for (const cat of j.categories) {
+    const budget = j.budgets[cat] || 0, spent = j.catSpent[cat] || 0;
+    const left = budget - spent, ratio = budget > 0 ? spent / budget : 0;
+    const lvl = left < 0 ? "red" : ratio > 0.8 ? "amber" : "green";
+    const card = document.createElement("div");
+    card.className = "budget-card";
+    card.innerHTML = `<div class="top"><span class="cat" style="color:${CAT_COLORS[cat]}">${cat}</span>
+      <span><input class="edit-budget" type="number" value="${budget}" onchange="setBudget('${cat}', this.value)"> /月</span></div>
+      <div class="bar"><div class="bar-${lvl}" style="width:${Math.min(ratio * 100, 100)}%"></div></div>
+      <div class="num">已花 <b>¥${spent.toFixed(0)}</b> · 剩 ¥${left.toFixed(0)}</div>`;
+    grid.appendChild(card);
+  }
+  const tbody = document.getElementById("tbody");
+  tbody.innerHTML = j.txns.map(t => `<tr>
+    <td>${t.date.slice(5)}</td><td><span style="color:${CAT_COLORS[t.category]}">●</span> ${t.category}</td>
+    <td style="color:#7a7a8c">${t.note || "—"}</td>
+    <td class="amount" style="text-align:right">¥${t.amount.toFixed(2)}</td>
+    <td><button class="del" onclick="del(${t.id})">✕</button></td></tr>`).join("");
+  document.getElementById("empty").style.display = j.txns.length ? "none" : "block";
+  drawChart(j.catSpent, j.categories);
+}
+
+async function setBudget(cat, val) {
+  await fetch("/api/budget", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ category: cat, amount: Number(val) || 0 }) });
+  loadState();
+}
+async function del(id) {
+  await fetch("/api/delete", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ id }) });
+  loadState();
+}
+
+function drawChart(catSpent, categories) {
+  const ctx = document.getElementById("chart");
+  const data = categories.map(c => catSpent[c] || 0);
+  if (chart) chart.destroy();
+  chart = new Chart(ctx, {
+    type: "doughnut",
+    data: { labels: categories, datasets: [{ data, backgroundColor: categories.map(c => CAT_COLORS[c]), borderWidth: 2, borderColor: "#fff" }] },
+    options: { maintainAspectRatio: false, plugins: { legend: { position: "right", labels: { boxWidth: 12, font: { size: 12 } } } } }
+  });
+}
+
+document.getElementById("ipt").addEventListener("keydown", e => { if (e.key === "Enter") record(); });
+loadState();
+</script>
+</body>
+</html>
