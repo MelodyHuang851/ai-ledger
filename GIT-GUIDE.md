@@ -39,6 +39,25 @@ e4f5g6h 新增月度汇总功能
 
 前面那串就是**版本号（commit ID）**，回滚时会用到。
 
+## 1.5 推送到 GitHub（云端备份）
+
+远程仓库：`https://github.com/MelodyHuang851/ai-ledger`（已配置为 origin，Token 已存在凭据管理器，不需要再输密码）
+
+```bash
+git push                # 把本地新 commit 上传到 GitHub
+```
+
+推送节奏：**commit 每次小改动都做；push 每天收工前 / 完成一个功能时做**。push 的本质是备份，不用纠结版本够不够完美。
+
+换电脑或恢复代码时：
+
+```bash
+git clone https://github.com/MelodyHuang851/ai-ledger.git   # 拉下来（仅代码，data.json/secret.json 需手动拷贝）
+git pull                # 已有仓库时，拉取远程最新代码
+```
+
+注意：`data.json`（账本）和 `secret.json`（API Key）不会被推送，这是故意的——换新电脑时需要自己拷贝这两个文件。
+
 ## 2. 三棵树的概念（理解回滚的关键）
 
 ```
