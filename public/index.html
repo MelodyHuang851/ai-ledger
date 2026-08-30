@@ -3,178 +3,514 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI 记账 · 一句话记账</title>
+<meta name="color-scheme" content="light">
+<title>一句账 · AI 记账</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✦</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f6f7f9; color: #1a1a2e; padding: 24px 16px 60px; }
-  .wrap { max-width: 860px; margin: 0 auto; }
-  h1 { font-size: 22px; font-weight: 600; margin-bottom: 4px; }
-  .sub { color: #7a7a8c; font-size: 13px; margin-bottom: 20px; }
+  :root {
+    --bg: #f6f4f0; --card: #fff;
+    --line: #e9e4da; --line-soft: #f2eee7;
+    --ink: #26221b; --ink-2: #6e6759; --ink-3: #a49c8d;
+    --accent: #177a54; --accent-deep: #0d5c40; --accent-bg: #eaf4ee;
+    --red: #c2432e;
+    --r: 16px;
+  }
+  html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+  body {
+    font-family: -apple-system, "SF Pro Text", "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", sans-serif;
+    background: linear-gradient(180deg, #f1ede6 0%, var(--bg) 320px);
+    color: var(--ink);
+    padding: 36px 20px 72px;
+    min-height: 100vh;
+  }
+  ::selection { background: #d7eadf; }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  .num { font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
 
-  .card { background: #fff; border-radius: 14px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
-  .input-row { display: flex; gap: 10px; }
-  #ipt { flex: 1; font-size: 16px; padding: 12px 14px; border: 2px solid #e4e4ec; border-radius: 10px; outline: none; transition: border .15s; }
-  #ipt:focus { border-color: #534ab7; }
-  #btn { padding: 12px 22px; background: #534ab7; color: #fff; border: none; border-radius: 10px; font-size: 15px; cursor: pointer; }
-  #btn:disabled { background: #b9b9d6; cursor: wait; }
-  .hint { font-size: 12px; color: #a0a0b2; margin-top: 8px; }
+  /* ---------- 顶栏 ---------- */
+  .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; }
+  .brand { font-size: 18px; font-weight: 700; }
+  .brand-mark { color: var(--accent); margin-right: 6px; }
+  .top-month { font-size: 13px; color: var(--ink-2); background: #fff; border: 1px solid var(--line); padding: 5px 14px; border-radius: 999px; }
 
-  .feedback-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; border-radius: 10px; margin-top: 10px; font-size: 14px; }
-  .fb-green { background: #e8f7ef; color: #0f6e56; }
-  .fb-amber { background: #fdf3e3; color: #854f0b; }
-  .fb-red { background: #fdecec; color: #a32d2d; }
-  .fb-left b { font-size: 18px; }
+  /* ---------- 卡片 ---------- */
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); padding: 20px; box-shadow: 0 1px 2px rgba(38,34,27,.04); }
+  .label { font-size: 12px; color: var(--ink-3); letter-spacing: .12em; }
 
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
-  .budget-card { background: #fff; border-radius: 12px; padding: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
-  .budget-card .top { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 8px; }
-  .budget-card .top .cat { font-weight: 600; }
-  .bar { height: 8px; background: #eef0f4; border-radius: 4px; overflow: hidden; }
-  .bar > div { height: 100%; border-radius: 4px; transition: width .4s; }
-  .bar-green { background: #1d9e75; } .bar-amber { background: #ef9f27; } .bar-red { background: #e24b4a; }
-  .budget-card .num { font-size: 12px; color: #7a7a8c; margin-top: 6px; }
-  .budget-card .num b { color: #1a1a2e; }
-  .edit-budget { border: 1px solid #e4e4ec; border-radius: 6px; width: 56px; font-size: 12px; padding: 2px 4px; text-align: right; }
+  /* ---------- Hero：本月概览 + 今日还能花 ---------- */
+  .hero { display: grid; grid-template-columns: 1fr 250px; gap: 14px; margin-bottom: 14px; }
+  .hero-main { display: flex; flex-direction: column; }
+  .hero-head { display: flex; justify-content: space-between; align-items: center; }
+  .hero-chip { font-size: 12px; color: var(--ink-2); background: var(--line-soft); padding: 3px 11px; border-radius: 999px; }
+  .hero-amount { font-size: 42px; font-weight: 750; margin: 8px 0 2px; line-height: 1.1; }
+  .hero-amount small { font-size: 20px; font-weight: 600; color: var(--ink-3); }
+  .hero-meta { font-size: 13px; color: var(--ink-2); margin-bottom: 14px; }
+  .track { position: relative; height: 10px; background: #efe9df; border-radius: 999px; }
+  .track-fill { height: 100%; border-radius: 999px; transition: width .6s cubic-bezier(.22,1,.36,1); }
+  .fill-green { background: #37a277; } .fill-amber { background: #dfa032; } .fill-red { background: #d4573f; }
+  .track-today { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--ink); border-radius: 1px; opacity: .5; }
+  .hero-forecast { display: flex; align-items: center; gap: 7px; font-size: 13px; margin-top: 12px; }
+  .fc-green { color: #14684a; } .fc-red { color: #a83a26; }
+  .hero-forecast b { font-weight: 700; }
+  .dot { width: 7px; height: 7px; border-radius: 999px; flex: none; }
+  .dot-green { background: #37a277; } .dot-red { background: #d4573f; }
+  .hero-today { background: var(--accent-bg); border-color: #d3e7db; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+  .hero-today .label { color: #55806c; }
+  .today-amount { font-size: 34px; font-weight: 750; color: var(--accent-deep); line-height: 1; }
+  .today-sub { font-size: 12.5px; color: #55806c; }
 
-  table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  th { text-align: left; color: #7a7a8c; font-weight: 500; font-size: 12px; padding: 8px 6px; border-bottom: 1px solid #eef0f4; }
-  td { padding: 10px 6px; border-bottom: 1px solid #f4f5f8; }
-  .amount { font-weight: 600; }
-  .del { color: #c3c3cf; cursor: pointer; background: none; border: none; font-size: 14px; }
-  .del:hover { color: #e24b4a; }
-  .empty { text-align: center; color: #a0a0b2; padding: 30px 0; font-size: 13px; }
-  #month { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
-  .chart-box { height: 260px; }
-  .section-title { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+  /* ---------- 命令栏 ---------- */
+  .cmd-card { padding: 14px; }
+  .cmd-row { display: flex; align-items: center; gap: 10px; border: 1.5px solid var(--line); border-radius: 13px; padding: 5px 5px 5px 15px; background: #fdfcfb; transition: border-color .15s, box-shadow .15s; }
+  .cmd-row:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(23,122,84,.09); }
+  .cmd-icon { color: var(--accent); font-size: 15px; }
+  #ipt { flex: 1; border: none; outline: none; font-size: 15.5px; background: transparent; color: var(--ink); font-family: inherit; min-width: 0; }
+  #ipt::placeholder { color: var(--ink-3); }
+  .cmd-btn { background: var(--accent); color: #fff; border: none; border-radius: 9px; padding: 9px 20px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; transition: background .15s; flex: none; }
+  .cmd-btn:hover { background: var(--accent-deep); }
+  .cmd-btn:disabled { opacity: .55; cursor: wait; }
+  .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 6px 2px; }
+  .chip-label { font-size: 12.5px; color: var(--ink-3); }
+  .chip { font-size: 12.5px; color: var(--ink-2); background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 5px 13px; cursor: pointer; font-family: inherit; transition: all .15s; }
+  .chip:hover { color: var(--accent-deep); border-color: var(--accent); background: var(--accent-bg); }
+
+  /* ---------- AI 反馈 ---------- */
+  #feedback { margin-top: 14px; }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(5px); } }
+  .fb { display: flex; align-items: center; gap: 12px; border-radius: 12px; padding: 12px 14px; margin-bottom: 8px; animation: fadeUp .25s ease; }
+  .fb-green { background: #eaf4ee; color: #14523c; }
+  .fb-amber { background: #faf2df; color: #7a5510; }
+  .fb-red { background: #faece8; color: #a03724; }
+  .fb-icon { width: 26px; height: 26px; border-radius: 999px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex: none; background: rgba(255,255,255,.75); }
+  .fb-body { min-width: 0; }
+  .fb-title { font-size: 14px; font-weight: 650; }
+  .fb-note { font-size: 12.5px; font-weight: 400; opacity: .65; }
+  .fb-tip { font-size: 11px; font-weight: 600; border: 1px solid currentColor; border-radius: 999px; padding: 1px 8px; margin-left: 6px; opacity: .8; }
+  .fb-sub { font-size: 12.5px; opacity: .8; margin-top: 3px; }
+  .fb-undo { margin-left: auto; flex: none; font-size: 12px; color: inherit; opacity: .75; background: rgba(255,255,255,.7); border: 1px solid rgba(0,0,0,.07); border-radius: 999px; padding: 4px 12px; cursor: pointer; font-family: inherit; }
+  .fb-undo:hover { opacity: 1; }
+  .ans { display: flex; gap: 12px; align-items: flex-start; background: #27231c; color: #f2eee6; border-radius: 14px; padding: 15px 17px; animation: fadeUp .25s ease; }
+  .ans-icon { color: #8fd6ae; font-size: 15px; }
+  .ans-body { font-size: 14px; line-height: 1.75; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .ans-loading .ans-icon { animation: pulse 1s ease infinite; }
+
+  /* ---------- 区块标题 ---------- */
+  .section-head { display: flex; align-items: baseline; gap: 12px; margin: 28px 0 13px; }
+  .section-head h2 { font-size: 15px; font-weight: 700; }
+  .section-note { font-size: 12px; color: var(--ink-3); }
+
+  /* ---------- 预算卡片 ---------- */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; }
+  .bcard { padding: 16px; }
+  .bcard-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 11px; }
+  .bcard-cat { font-size: 13.5px; font-weight: 650; display: flex; align-items: center; gap: 7px; }
+  .bcard-cat i { width: 9px; height: 9px; border-radius: 999px; display: inline-block; }
+  .bcard-budget { font-size: 12px; color: var(--ink-2); background: var(--line-soft); border: 1px solid transparent; border-radius: 8px; padding: 3px 9px; cursor: pointer; font-family: inherit; }
+  .bcard-budget:hover { background: #fff; border-color: var(--line); }
+  .bcard-edit { width: 76px; font-size: 12px; border: 1px solid var(--accent); border-radius: 8px; padding: 3px 7px; outline: none; text-align: right; font-family: inherit; }
+  .bar { height: 7px; background: #efe9df; border-radius: 999px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 999px; transition: width .6s cubic-bezier(.22,1,.36,1); }
+  .bcard-nums { font-size: 12.5px; color: var(--ink-2); margin-top: 9px; }
+  .bcard-nums b { color: var(--ink); font-weight: 650; }
+  .over { color: var(--red); font-weight: 650; }
+  .bfc { font-size: 12px; margin-top: 4px; }
+  .bfc-green { color: #4d8a6e; } .bfc-amber { color: #a37a1e; } .bfc-red { color: #b0492f; }
+
+  /* ---------- 图表 ---------- */
+  .charts { display: grid; grid-template-columns: 3fr 2fr; gap: 14px; margin-bottom: 14px; }
+  .chart-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 14px; gap: 10px; }
+  .chart-head h3 { font-size: 14px; font-weight: 700; }
+  .chart-note { font-size: 12px; color: var(--ink-3); }
+  .chart-box { height: 240px; position: relative; }
+  #catEmpty { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: var(--ink-3); font-size: 13px; }
+
+  /* ---------- 流水 ---------- */
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .08em; color: var(--ink-3); padding: 8px; border-bottom: 1px solid var(--line); }
+  td { padding: 10px 8px; border-bottom: 1px solid var(--line-soft); }
+  tbody tr:hover td { background: #fbf9f5; }
+  tbody tr:last-child td { border-bottom: none; }
+  .td-date { color: var(--ink-3); }
+  .td-cat { display: flex; align-items: center; gap: 7px; }
+  .td-cat i { width: 8px; height: 8px; border-radius: 999px; display: inline-block; }
+  .td-note { color: var(--ink-2); }
+  .td-amt { text-align: right; font-weight: 650; }
+  .td-del { width: 30px; text-align: right; }
+  .del { opacity: 0; border: none; background: none; color: var(--ink-3); cursor: pointer; font-size: 13px; padding: 2px 4px; }
+  tbody tr:hover .del { opacity: 1; }
+  .del:hover { color: var(--red); }
+  .empty { display: none; text-align: center; color: var(--ink-3); font-size: 13px; padding: 26px 0; }
+
+  .foot { text-align: center; font-size: 12px; color: var(--ink-3); margin-top: 40px; line-height: 1.8; }
+
+  @media (max-width: 720px) {
+    body { padding: 20px 12px 56px; }
+    .hero { grid-template-columns: 1fr; }
+    .hero-amount { font-size: 34px; }
+    .today-amount { font-size: 30px; }
+    .charts { grid-template-columns: 1fr; }
+    .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+    .del { opacity: 1; }
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>AI 记账</h1>
-  <div class="sub">说一句话就记完 —— 解析由 GLM 完成，算账和预算由本地完成</div>
+  <header class="top">
+    <div class="brand"><span class="brand-mark">✦</span>一句账</div>
+    <div class="top-month" id="topMonth"></div>
+  </header>
 
-  <div class="card">
-    <div class="input-row">
-      <input id="ipt" placeholder='试试："午饭35 打车42" 或 "昨天买书 89"' autocomplete="off">
-      <button id="btn" onclick="record()">记一笔</button>
+  <!-- Hero：事前 —— 花钱之前就知道今天还能花多少 -->
+  <section class="hero">
+    <div class="card hero-main">
+      <div class="hero-head">
+        <span class="label">本月支出</span>
+        <span class="hero-chip" id="heroDays"></span>
+      </div>
+      <div class="hero-amount num" id="heroAmount">--</div>
+      <div class="hero-meta" id="heroMeta"></div>
+      <div class="track">
+        <div class="track-fill fill-green" id="trackFill"></div>
+        <div class="track-today" id="trackToday" title="时间进度"></div>
+      </div>
+      <div class="hero-forecast fc-green" id="heroForecast"></div>
     </div>
-    <div class="hint">支持多笔、口语化金额、"昨天/前天"，也支持自然语言提问</div>
+    <div class="card hero-today">
+      <span class="label">今日还能花</span>
+      <div class="today-amount num" id="todayAmount">--</div>
+      <div class="today-sub" id="todaySub"></div>
+    </div>
+  </section>
+
+  <!-- 命令栏：一个输入框，三种意图（记账 / 提问 / 调预算） -->
+  <section class="card cmd-card">
+    <div class="cmd-row">
+      <span class="cmd-icon">✦</span>
+      <input id="ipt" placeholder="一句话记账、提问、调预算 —— 比如「午饭 35，打车 12」" autocomplete="off" autofocus>
+      <button id="btn" class="cmd-btn">记一笔</button>
+    </div>
+    <div class="chips">
+      <span class="chip-label">试试：</span>
+      <button class="chip" data-q="午饭 35，打车 12">午饭 35，打车 12</button>
+      <button class="chip" data-q="这个月吃饭花了多少？">这个月吃饭花了多少？</button>
+      <button class="chip" data-q="按现在的节奏，月底会超支吗？">月底会超支吗？</button>
+      <button class="chip" data-q="把娱乐预算改成 300">把娱乐预算改成 300</button>
+    </div>
     <div id="feedback"></div>
+  </section>
+
+  <!-- 事中+事后：预算红绿灯 + 节奏预测 -->
+  <div class="section-head">
+    <h2>预算红绿灯</h2>
+    <span class="section-note">预测 = 当月日均 × 全月天数 · 点击预算金额可修改</span>
   </div>
+  <section class="grid" id="budgets"></section>
 
-  <div class="section-title">本月预算红绿灯</div>
-  <div class="grid" id="budgets"></div>
-
-  <div style="margin-top: 16px" class="card">
-    <div id="month"></div>
-    <div class="chart-box"><canvas id="chart"></canvas></div>
+  <div class="section-head">
+    <h2>支出分析</h2>
+    <span class="section-note">今天的柱子会加深显示</span>
   </div>
+  <section class="charts">
+    <div class="card">
+      <div class="chart-head"><h3>每日支出</h3><span class="chart-note" id="paceNote"></span></div>
+      <div class="chart-box"><canvas id="dailyChart"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="chart-head"><h3>类目占比</h3></div>
+      <div class="chart-box"><canvas id="catChart"></canvas><div id="catEmpty">本月暂无支出</div></div>
+    </div>
+  </section>
 
-  <div class="card">
-    <div class="section-title">本月流水</div>
+  <section class="card">
+    <div class="chart-head"><h3>本月流水</h3><span class="chart-note" id="txnCount"></span></div>
     <table>
       <thead><tr><th>日期</th><th>类目</th><th>备注</th><th style="text-align:right">金额</th><th></th></tr></thead>
       <tbody id="tbody"></tbody>
     </table>
-    <div class="empty" id="empty" style="display:none">还没有记录，先在上面记一笔试试</div>
-  </div>
+    <div class="empty" id="empty">本月还没有记录，去上面记一笔试试</div>
+  </section>
+
+  <footer class="foot">AI 负责听懂你的话，预算、冲击与预测全部由本地代码计算<br>—— 数据不出门，算术不出错。</footer>
 </div>
 
 <script>
 // 防呆：如果用户直接双击 HTML 文件（file:// 方式）打开，给出明确指引而不是报错
 if (location.protocol === "file:") {
-  document.body.innerHTML = '<div style="max-width:560px;margin:80px auto;padding:32px;background:#fff;border-radius:14px;box-shadow:0 1px 3px rgba(0,0,0,.08);text-align:center;font-family:\'Microsoft YaHei\',sans-serif">'
+  document.body.innerHTML = '<div style="max-width:560px;margin:80px auto;padding:36px;background:#fff;border:1px solid #e9e4da;border-radius:16px;text-align:center;font-family:\'Microsoft YaHei\',sans-serif">'
     + '<div style="font-size:40px">⚠️</div>'
-    + '<h2 style="margin:16px 0 8px;font-size:20px;color:#1a1a2e">打开方式不对</h2>'
-    + '<p style="color:#7a7a8c;font-size:14px;line-height:1.8">你是直接双击了 HTML 文件，这种方式无法连接后端服务。<br>请按下面两步操作：</p>'
-    + '<div style="background:#f6f7f9;border-radius:10px;padding:14px;margin:16px 0;font-size:14px;line-height:2;text-align:left;color:#1a1a2e">'
-    + '1️⃣ 双击 D 盘的 <b>ai-ledger</b> 文件夹里的 <b>启动记账.bat</b><br>'
-    + '2️⃣ 等浏览器自动打开 <b>http://localhost:3456</b> 即可使用</div>'
-    + '<p style="color:#a0a0b2;font-size:12px">（记住：永远不要直接双击 index.html）</p></div>';
+    + '<h2 style="margin:16px 0 8px;font-size:20px;color:#26221b">打开方式不对</h2>'
+    + '<p style="color:#6e6759;font-size:14px;line-height:1.8">你是直接双击了 HTML 文件，这种方式连不上后端服务。<br>请按下面两步操作：</p>'
+    + '<div style="background:#f6f4f0;border-radius:12px;padding:16px;margin:16px 0;font-size:14px;line-height:2.2;text-align:left;color:#26221b">'
+    + '1️⃣ 双击 D 盘 <b>ai-ledger</b> 文件夹里的 <b>启动记账.bat</b><br>'
+    + '2️⃣ 等浏览器自动打开 <b>http://localhost:3456</b> 即可</div>'
+    + '<p style="color:#a49c8d;font-size:12px">（记住：永远不要直接双击 index.html）</p></div>';
   throw new Error("opened via file:// protocol");
 }
 
-let chart = null;
-const CAT_COLORS = {"餐饮":"#e24b4a","交通":"#185fa5","购物":"#534ab7","娱乐":"#d4537e","居住":"#0f6e56","医疗":"#ef9f27","学习":"#3b6d11","其他":"#888780"};
+const $ = id => document.getElementById(id);
+const nf0 = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 });
+const nf2 = new Intl.NumberFormat("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const money = n => "¥" + nf0.format(Math.round(n));
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-async function record() {
-  const ipt = document.getElementById("ipt"), btn = document.getElementById("btn");
-  const text = ipt.value.trim();
-  if (!text) return;
-  btn.disabled = true; btn.textContent = "解析中…";
+const CAT_COLORS = {
+  "餐饮": "#C0503F", "交通": "#3E7DA6", "购物": "#8061B8", "娱乐": "#C25E93",
+  "居住": "#2E8F72", "医疗": "#D69A26", "学习": "#7E9C3F", "其他": "#948D82",
+};
+
+let state = null, dailyChart = null, catChart = null;
+const fbBox = $("feedback");
+
+async function loadState() {
+  let j;
   try {
-    const res = await fetch("/api/record", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ text }) });
-    const j = await res.json();
-    if (j.error) { alert("出错了：" + j.error); return; }
-    if (j.type !== "ok") { alert("这句看起来不是记账哦，换个说法试试，比如「午饭35」"); return; }
-    showFeedback(j.feedback);
-    ipt.value = "";
-    loadState();
-  } catch (e) { alert("请求失败：" + e.message); }
-  finally { btn.disabled = false; btn.textContent = "记一笔"; }
+    j = await (await fetch("/api/state")).json();
+  } catch (_) {
+    return showBootError("down");
+  }
+  if (j.error) return showBootError("other", j.error);
+  // 后台还是旧版服务（页面新、进程旧）时，给人话提示而不是抛 undefined
+  if (j.daysLeft === undefined || j.totalSpent === undefined) return showBootError("stale");
+  state = j;
+  renderAll();
 }
 
-function showFeedback(items) {
-  const box = document.getElementById("feedback");
-  box.innerHTML = items.map(f => {
-    const unit = f.note ? "「" + f.note + "」" : "同类消费";
-    const canBuy = f.level === "red" ? "已超支 ¥" + Math.abs(f.budgetLeft).toFixed(0) : "还能" + (f.stillCanBuy > 0 ? "再来 " + f.stillCanBuy + " 次" : "撑到月底");
-    return `<div class="feedback-item fb-${f.level}">
-      <div>✅ ${f.category} ¥${f.amount.toFixed(0)} <span style="opacity:.7">${f.note || ""} · ${f.tip}</span></div>
-      <div class="fb-left" style="text-align:right"><b>剩 ¥${f.budgetLeft.toFixed(0)}</b><div style="font-size:12px;opacity:.8">${canBuy}</div></div>
+function showBootError(kind, detail) {
+  const map = {
+    stale: ["页面和后台服务的版本不一致", "页面已是新版，但正在运行的后台服务还是旧进程——多半是旧窗口没关，或新服务启动时端口被占用。"],
+    down: ["连不上后台服务", "后台服务没有在运行。"],
+    other: ["后台服务返回了错误", esc(String(detail))],
+  };
+  const [title, desc] = map[kind] || map.other;
+  document.querySelector(".wrap").innerHTML = `
+  <header class="top"><div class="brand"><span class="brand-mark">✦</span>一句账</div></header>
+  <div class="card" style="padding:34px 24px;text-align:center">
+    <div style="font-size:40px">🔄</div>
+    <h2 style="margin:14px 0 8px;font-size:19px">${title}</h2>
+    <p style="color:var(--ink-2);font-size:14px;line-height:1.9">${desc}</p>
+    <div style="background:var(--line-soft);border-radius:12px;padding:16px 20px;margin:18px auto 0;max-width:430px;font-size:14px;line-height:2.2;text-align:left">
+      1️⃣ 关闭所有运行记账的黑色命令行窗口<br>
+      2️⃣ 重新双击 <b>启动记账.bat</b>（新版会自动清理旧进程）<br>
+      3️⃣ 浏览器会自动打开 http://localhost:3456
+    </div>
+  </div>`;
+}
+function renderAll() { renderTop(); renderHero(); renderBudgets(); renderCharts(); renderTable(); }
+
+// ---------- 顶栏 / Hero ----------
+function renderTop() {
+  const [y, m] = state.month.split("-");
+  $("topMonth").textContent = `${y} 年 ${Number(m)} 月 · 还剩 ${state.daysLeft} 天`;
+}
+
+function renderHero() {
+  const s = state;
+  const [int, dec] = s.totalSpent.toFixed(2).split(".");
+  $("heroAmount").innerHTML = `¥${Number(int).toLocaleString("zh-CN")}<small>.${dec}</small>`;
+  $("heroDays").textContent = `还剩 ${s.daysLeft} 天`;
+
+  const pct = s.totalBudget > 0 ? s.totalSpent / s.totalBudget : 0;
+  const timePct = s.daysPassed / s.daysInMonth;
+  $("heroMeta").textContent = `总预算 ${money(s.totalBudget)} · 支出 ${(pct * 100).toFixed(1)}% · 时间 ${(timePct * 100).toFixed(0)}%`;
+
+  // 进度条颜色 = 花钱速度是否跑赢时间；黑色刻度线 = 时间进度
+  const fill = $("trackFill");
+  fill.style.width = Math.min(pct * 100, 100) + "%";
+  fill.className = "track-fill fill-" + (pct >= 1 ? "red" : pct > timePct ? "amber" : "green");
+  $("trackToday").style.left = Math.min(timePct * 100, 100) + "%";
+
+  const fc = $("heroForecast");
+  if (s.totalSpent === 0) {
+    fc.className = "hero-forecast fc-green";
+    fc.innerHTML = `<span class="dot dot-green"></span>本月还没有支出，记第一笔试试`;
+  } else {
+    const over = s.projectedDelta > 0;
+    fc.className = "hero-forecast " + (over ? "fc-red" : "fc-green");
+    fc.innerHTML = `<span class="dot ${over ? "dot-red" : "dot-green"}"></span>按当前日均 ${money(s.dailyAvg)}，月底预计 ${money(s.projected)}，${over ? `将超支 <b>${money(s.projectedDelta)}</b>` : `可结余 <b>${money(-s.projectedDelta)}</b>`}`;
+  }
+
+  $("todayAmount").textContent = money(s.todayAllowance);
+  $("todaySub").textContent = `剩余预算 ${money(s.totalLeft)} ÷ 剩余 ${s.daysLeft} 天`;
+}
+
+// ---------- 预算卡片 ----------
+function renderBudgets() {
+  $("budgets").innerHTML = state.catStats.map(c => {
+    const pct = c.budget > 0 ? c.spent / c.budget : 0;
+    const lvl = c.left < 0 ? "red" : pct > 0.8 ? "amber" : "green";
+    const left = c.left < 0 ? `<span class="over">超支 ¥${nf0.format(-c.left)}</span>` : `剩 ¥${nf0.format(c.left)}`;
+    let fc;
+    if (c.left < 0) fc = `已超支 ¥${nf0.format(-c.left)}，控制一下`;
+    else if (c.spent === 0) fc = "本月还没支出";
+    else if (c.projectedDelta > 0) fc = `按此节奏月底将超支 ¥${nf0.format(c.projectedDelta)}`;
+    else fc = `按此节奏月底 ¥${nf0.format(c.projected)} · 状态良好`;
+    return `<div class="card bcard">
+      <div class="bcard-top">
+        <span class="bcard-cat"><i style="background:${CAT_COLORS[c.category]}"></i>${c.category}</span>
+        <button class="bcard-budget" title="点击修改预算" onclick="editBudget('${c.category}', this)">¥${nf0.format(c.budget)}/月</button>
+      </div>
+      <div class="bar"><div class="bar-fill fill-${lvl}" style="width:${Math.min(pct * 100, 100)}%"></div></div>
+      <div class="bcard-nums">已花 <b>¥${nf0.format(c.spent)}</b> · ${left}</div>
+      <div class="bfc bfc-${lvl}">${fc}</div>
     </div>`;
   }).join("");
 }
 
-async function loadState() {
-  const j = await (await fetch("/api/state")).json();
-  document.getElementById("month").textContent = j.month.replace("-", " 年 ") + " 月 · 各类目支出";
-  const grid = document.getElementById("budgets");
-  grid.innerHTML = "";
-  for (const cat of j.categories) {
-    const budget = j.budgets[cat] || 0, spent = j.catSpent[cat] || 0;
-    const left = budget - spent, ratio = budget > 0 ? spent / budget : 0;
-    const lvl = left < 0 ? "red" : ratio > 0.8 ? "amber" : "green";
-    const card = document.createElement("div");
-    card.className = "budget-card";
-    card.innerHTML = `<div class="top"><span class="cat" style="color:${CAT_COLORS[cat]}">${cat}</span>
-      <span><input class="edit-budget" type="number" value="${budget}" onchange="setBudget('${cat}', this.value)"> /月</span></div>
-      <div class="bar"><div class="bar-${lvl}" style="width:${Math.min(ratio * 100, 100)}%"></div></div>
-      <div class="num">已花 <b>¥${spent.toFixed(0)}</b> · 剩 ¥${left.toFixed(0)}</div>`;
-    grid.appendChild(card);
-  }
-  const tbody = document.getElementById("tbody");
-  tbody.innerHTML = j.txns.map(t => `<tr>
-    <td>${t.date.slice(5)}</td><td><span style="color:${CAT_COLORS[t.category]}">●</span> ${t.category}</td>
-    <td style="color:#7a7a8c">${t.note || "—"}</td>
-    <td class="amount" style="text-align:right">¥${t.amount.toFixed(2)}</td>
-    <td><button class="del" onclick="del(${t.id})">✕</button></td></tr>`).join("");
-  document.getElementById("empty").style.display = j.txns.length ? "none" : "block";
-  drawChart(j.catSpent, j.categories);
-}
-
-async function setBudget(cat, val) {
-  await fetch("/api/budget", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ category: cat, amount: Number(val) || 0 }) });
-  loadState();
-}
-async function del(id) {
-  await fetch("/api/delete", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ id }) });
-  loadState();
-}
-
-function drawChart(catSpent, categories) {
-  const ctx = document.getElementById("chart");
-  const data = categories.map(c => catSpent[c] || 0);
-  if (chart) chart.destroy();
-  chart = new Chart(ctx, {
-    type: "doughnut",
-    data: { labels: categories, datasets: [{ data, backgroundColor: categories.map(c => CAT_COLORS[c]), borderWidth: 2, borderColor: "#fff" }] },
-    options: { maintainAspectRatio: false, plugins: { legend: { position: "right", labels: { boxWidth: 12, font: { size: 12 } } } } }
+function editBudget(cat, btn) {
+  const cur = state.budgets[cat] || 0;
+  const inp = document.createElement("input");
+  inp.type = "number"; inp.value = cur; inp.className = "bcard-edit";
+  btn.replaceWith(inp);
+  inp.focus(); inp.select();
+  let done = false;
+  const finish = async () => {
+    if (done) return; done = true;
+    const v = Number(inp.value);
+    if (v > 0 && v !== cur) await setBudget(cat, v); else renderBudgets();
+  };
+  inp.addEventListener("blur", finish);
+  inp.addEventListener("keydown", e => {
+    if (e.key === "Enter") inp.blur();
+    if (e.key === "Escape") { done = true; renderBudgets(); }
   });
 }
 
-document.getElementById("ipt").addEventListener("keydown", e => { if (e.key === "Enter") record(); });
+// ---------- 图表 ----------
+function renderCharts() {
+  if (typeof Chart === "undefined") return; // CDN 挂了不影响其他功能
+  const s = state;
+
+  // 每日支出柱状图 + 日均预算线
+  $("paceNote").textContent = `红色虚线 = 日均预算 ${money(s.dailyPace)}`;
+  const labels = s.dailySeries.map(x => x.date);
+  const last = labels.length - 1;
+  if (dailyChart) dailyChart.destroy();
+  dailyChart = new Chart($("dailyChart"), {
+    data: {
+      labels,
+      datasets: [
+        { type: "bar", label: "每日支出", data: s.dailySeries.map(x => x.amount), backgroundColor: labels.map((_, i) => i === last ? "#2b2620" : "#dcd4c6"), borderRadius: 3, maxBarThickness: 18 },
+        { type: "line", label: "日均预算线", data: labels.map(() => s.dailyPace), borderColor: "#c0503f", borderDash: [5, 4], borderWidth: 1.5, pointRadius: 0 },
+      ],
+    },
+    options: {
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: c => c.dataset.type === "line" ? ` 日均预算 ${money(c.parsed.y)}` : ` 支出 ${money(c.parsed.y)}` } },
+      },
+      scales: {
+        y: { grid: { color: "#f1ece4" }, border: { display: false }, ticks: { font: { size: 11 }, color: "#a49c8d", callback: v => (v >= 1000 ? v / 1000 + "k" : v) } },
+        x: { grid: { display: false }, border: { display: false }, ticks: { maxTicksLimit: 10, font: { size: 11 }, color: "#a49c8d" } },
+      },
+    },
+  });
+
+  // 类目占比环图
+  const cats = s.catStats.filter(c => c.spent > 0).sort((a, b) => b.spent - a.spent);
+  $("catEmpty").style.display = cats.length ? "none" : "flex";
+  if (catChart) catChart.destroy();
+  catChart = new Chart($("catChart"), {
+    type: "doughnut",
+    data: {
+      labels: cats.map(c => `${c.category}  ${money(c.spent)}`),
+      datasets: [{ data: cats.map(c => c.spent), backgroundColor: cats.map(c => CAT_COLORS[c.category]), borderWidth: 2, borderColor: "#fff", hoverOffset: 6 }],
+    },
+    options: {
+      maintainAspectRatio: false, cutout: "64%",
+      plugins: { legend: { position: "right", labels: { usePointStyle: true, pointStyle: "circle", boxWidth: 7, font: { size: 12 }, color: "#6e6759", padding: 10 } } },
+    },
+  });
+}
+
+// ---------- 流水 ----------
+function renderTable() {
+  const s = state;
+  $("txnCount").textContent = s.txns.length ? `共 ${s.txns.length} 笔` : "";
+  $("tbody").innerHTML = s.txns.map(t => `<tr>
+    <td class="td-date num">${t.date.slice(5)}</td>
+    <td><span class="td-cat"><i style="background:${CAT_COLORS[t.category] || "#948D82"}"></i>${t.category}</span></td>
+    <td class="td-note">${esc(t.note) || "—"}</td>
+    <td class="td-amt num">¥${nf2.format(t.amount)}</td>
+    <td class="td-del"><button class="del" onclick="del(${t.id})" title="删除">✕</button></td>
+  </tr>`).join("");
+  $("empty").style.display = s.txns.length ? "none" : "block";
+}
+
+// ---------- 记录 / 提问 / 调预算（统一入口） ----------
+async function record() {
+  const ipt = $("ipt"), btn = $("btn");
+  const text = ipt.value.trim();
+  if (!text) return;
+  btn.disabled = true; btn.textContent = "解析中…";
+  fbBox.innerHTML = `<div class="ans ans-loading"><span class="ans-icon">✦</span><div class="ans-body">正在理解这句话…</div></div>`;
+  try {
+    const res = await fetch("/api/record", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+    const j = await res.json();
+    if (j.error) { showError("服务出错：" + j.error); return; }
+    ipt.value = "";
+    if (j.type === "ok") { showRecordFeedback(j.feedback); loadState(); }
+    else if (j.type === "budget") { showAnswer(`已把「${j.category}」的月预算调整为 ¥${nf0.format(j.amount)} ✅`); loadState(); }
+    else if (j.type === "answer") showAnswer(j.answer);
+    else showAnswer("这句没太听懂 🤔 可以试试「午饭 35」这样的记账，或者问我「这个月吃饭花了多少」");
+  } catch (e) {
+    showError("请求失败：" + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = "记一笔";
+  }
+}
+
+function showError(msg) {
+  fbBox.innerHTML = `<div class="fb fb-red"><span class="fb-icon">!</span><div class="fb-body"><div class="fb-title">${esc(msg)}</div></div></div>`;
+}
+
+function showAnswer(text) {
+  fbBox.innerHTML = `<div class="ans"><span class="ans-icon">✦</span><div class="ans-body">${esc(text)}</div></div>`;
+}
+
+function showRecordFeedback(items) {
+  fbBox.innerHTML = items.map(f => {
+    const icon = f.level === "red" ? "✕" : f.level === "amber" ? "!" : "✓";
+    const tip = f.level === "green" ? "" : `<span class="fb-tip">${f.tip}</span>`;
+    const tail = f.level === "red"
+      ? `该类目已超支 ¥${nf0.format(-f.budgetLeft)}`
+      : f.stillCanBuy > 0 ? `够再来 ${f.stillCanBuy} 次` : "再来一次就要见底了";
+    return `<div class="fb fb-${f.level}">
+      <span class="fb-icon">${icon}</span>
+      <div class="fb-body">
+        <div class="fb-title">${f.category} ¥${nf2.format(f.amount)}${f.note ? ` <span class="fb-note">${esc(f.note)}</span>` : ""}${tip}</div>
+        <div class="fb-sub">占本月预算 ${f.impactPct}% · 剩 ¥${nf0.format(Math.max(f.budgetLeft, 0))}，${tail}</div>
+      </div>
+      <button class="fb-undo" onclick="undo(${f.id}, this)">撤销</button>
+    </div>`;
+  }).join("");
+}
+
+// ---------- 预算 / 删除 / 撤销 ----------
+async function setBudget(cat, amount) {
+  await fetch("/api/budget", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ category: cat, amount }) });
+  loadState();
+}
+async function del(id) {
+  await fetch("/api/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+  loadState();
+}
+async function undo(id, el) {
+  await fetch("/api/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+  el.closest(".fb").remove();
+  loadState();
+}
+
+// ---------- 事件 ----------
+document.querySelectorAll(".chip").forEach(c => c.addEventListener("click", () => { $("ipt").value = c.dataset.q; record(); }));
+$("ipt").addEventListener("keydown", e => { if (e.key === "Enter") record(); });
+$("btn").addEventListener("click", record);
+
 loadState();
 </script>
 </body>

@@ -1,11 +1,16 @@
-// AI 记账平台 - 本地原型
+// 一句账 ✦ AI 记账 —— 本地原型
 // 零依赖：Node 22 原生 http + fetch，JSON 文件存储
-// AI 只做"人话 -> 结构化数据"的翻译，算账全部由本地代码完成
+//
+// 架构原则：LLM 只负责"人话 ⇄ 结构化"的翻译（解析输入 / 组织语言），
+// 所有计算（预算余量、冲击、节奏预测、聚合）由本地确定性代码完成——
+// 算术不出错，账目明细不出户。
+
 const http = require("http");
+const https = require("https"); // 兼容老版本 Node（<18 没有全局 fetch），调用智谱 API 用
 const fs = require("fs");
 const path = require("path");
 
-const PORT = 3456;
+const PORT = Number(process.env.PORT) || 3456;
 const DATA_FILE = path.join(__dirname, "data.json");
 
 // API Key 读取顺序：环境变量 ZHIPU_API_KEY > 本地 secret.json（已 gitignore，不会提交）
@@ -19,7 +24,9 @@ function loadApiKey() {
 }
 const ZHIPU_KEY = loadApiKey();
 const ZHIPU_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
-const MODEL = "glm-5.3-flash";
+// 模型选择（你当前的智谱资源包都是 glm-4.5-air 专用，所以用它消耗赠送额度）
+// 想换其他模型时改这一行即可，例如：\"glm-5.3-flash\"（按量付费）或\"glm-4.7-flash\"（免费但繁忙）
+const MODEL = "glm-4.7-flash"; // 切换到免费模型（原 glm-5.3-flash 需付费）
 
 const CATEGORIES = ["餐饮", "交通", "购物", "娱乐", "居住", "医疗", "学习", "其他"];
 const DEFAULT_BUDGETS = { 餐饮: 2000, 交通: 500, 购物: 1500, 娱乐: 600, 居住: 3000, 医疗: 400, 学习: 300, 其他: 500 };
@@ -32,117 +39,282 @@ function loadData() {
 }
 function saveData(d) { fs.writeFileSync(DATA_FILE, JSON.stringify(d, null, 2)); }
 
-// ---- 智谱 GLM：自然语言 -> 结构化账目 ----
-async function parseLedger(text) {
-  const sys = `你是记账解析器。把用户输入解析成 JSON 数组，每个元素代表一笔支出：
-{"amount": 数字, "category": 类目, "note": 简短备注(<=10字), "date": "YYYY-MM-DD"}
-类目只能从这些里选：${CATEGORIES.join("、")}
-规则：多笔支出拆成多条；"昨天/前天"换算成对应日期(今天是${new Date().toISOString().slice(0, 10)})；没提日期默认今天；金额是人民币元。
-如果输入不是记账（比如是提问或闲聊），返回 {"query": "原始输入"}。
-只输出 JSON，不要任何解释、不要 markdown 代码块。`;
+// ---------- 时间工具：一律本地时区（用 UTC 会让早 8 点前的"今天"变成昨天） ----------
+const pad = n => String(n).padStart(2, "0");
+const dateStr = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const todayStr = () => dateStr(new Date());
+const monthKey = s => s.slice(0, 7);
+const currentMonth = () => todayStr().slice(0, 7);
+const daysInMonthOf = mk => { const [y, m] = mk.split("-").map(Number); return new Date(y, m, 0).getDate(); };
+const round2 = n => Math.round(n * 100) / 100;
+// LLM 返回的日期可能没补零（"2026-8-28"），统一归一化
+function normalizeDate(s) {
+  if (typeof s !== "string") return todayStr();
+  const m = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+  return m ? `${m[1]}-${pad(Number(m[2]))}-${pad(Number(m[3]))}` : todayStr();
+}
 
-  if (!ZHIPU_KEY) throw new Error("缺少智谱 API Key：请在项目目录创建 secret.json，内容为 {\"ZHIPU_API_KEY\": \"你的key\"}");
-  const res = await fetch(ZHIPU_URL, {
-    method: "POST",
-    headers: { "Authorization": "Bearer " + ZHIPU_KEY, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: MODEL,
-      messages: [{ role: "system", content: sys }, { role: "user", content: text }],
-      temperature: 0.1,
-      max_tokens: 1024,
-    }),
+// ---------- 本地算账：月度统计 + 支出节奏预测（不经过 AI） ----------
+function monthStats(d) {
+  const mk = currentMonth();
+  const monthTxns = d.txns.filter(t => monthKey(t.date) === mk);
+
+  const catSpent = {};
+  let totalSpent = 0;
+  for (const t of monthTxns) { catSpent[t.category] = (catSpent[t.category] || 0) + t.amount; totalSpent += t.amount; }
+
+  const daysInMonth = daysInMonthOf(mk);
+  const dayOfMonth = Number(todayStr().slice(8)); // 今天是几号
+  const daysPassed = dayOfMonth;
+  const daysLeft = daysInMonth - dayOfMonth + 1; // 含今天
+
+  let totalBudget = 0;
+  for (const c of CATEGORIES) totalBudget += Number(d.budgets[c] || 0);
+
+  // 支出节奏：按当月日均外推月底总支出，月初就能预警"照这个速度会超"
+  const dailyAvg = daysPassed > 0 ? totalSpent / daysPassed : 0;
+  const projected = dailyAvg * daysInMonth;
+
+  const catStats = CATEGORIES.map(c => {
+    const budget = Number(d.budgets[c] || 0);
+    const spent = catSpent[c] || 0;
+    const proj = daysPassed > 0 ? (spent / daysPassed) * daysInMonth : 0;
+    return { category: c, budget, spent: round2(spent), left: round2(budget - spent), projected: round2(proj), projectedDelta: round2(proj - budget) };
   });
-  const j = await res.json();
+
+  // 每日支出序列（1 号到今天），给前端画柱状图
+  const dailyByDate = {};
+  for (const t of monthTxns) dailyByDate[t.date] = (dailyByDate[t.date] || 0) + t.amount;
+  const dailySeries = [];
+  for (let i = 1; i <= dayOfMonth; i++) dailySeries.push({ date: pad(i), amount: round2(dailyByDate[`${mk}-${pad(i)}`] || 0) });
+
+  return {
+    month: mk, daysInMonth, daysPassed, daysLeft,
+    totalBudget, totalSpent: round2(totalSpent), totalLeft: round2(totalBudget - totalSpent),
+    dailyAvg: round2(dailyAvg), projected: round2(projected), projectedDelta: round2(projected - totalBudget),
+    todayAllowance: round2(daysLeft > 0 ? Math.max(0, (totalBudget - totalSpent) / daysLeft) : 0), // 今日"安全额度"
+    dailyPace: round2(totalBudget / daysInMonth), // 日均预算线
+    catStats, dailySeries, catSpent,
+  };
+}
+
+// ---------- 智谱 GLM 调用 ----------
+// 兼容性：全局 fetch 要 Node 18+ 才有；检测不到时自动退回原生 https.request，保持零依赖
+function postJSON(url, headers, body) {
+  if (typeof fetch === "function") {
+    const opts = { method: "POST", headers, body };
+    let timer = null;
+    if (typeof AbortController === "function") {
+      const ac = new AbortController();
+      timer = setTimeout(() => ac.abort(), 30000);
+      opts.signal = ac.signal;
+    }
+    return fetch(url, opts).then(r => r.json())
+      .catch(e => {
+        const msg = String((e && e.message) || e);
+        throw new Error(/abort/i.test(msg) ? "调用智谱 API 超时（30 秒无响应）" : "调用智谱 API 失败：" + msg);
+      })
+      .finally(() => { if (timer) clearTimeout(timer); });
+  }
+  // 老版本 Node：原生 https.request
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const req = https.request({
+      hostname: u.hostname, port: u.port || 443, path: u.pathname + u.search, method: "POST",
+      headers: Object.assign({}, headers, { "Content-Length": Buffer.byteLength(body) }),
+    }, res => {
+      let data = "";
+      res.on("data", c => data += c);
+      res.on("end", () => {
+        try { resolve(JSON.parse(data)); }
+        catch (_) { reject(new Error("API 返回了无法解析的内容：" + String(data).slice(0, 120))); }
+      });
+    });
+    req.on("error", reject);
+    req.setTimeout(30000, () => req.destroy(new Error("调用智谱 API 超时（30 秒无响应）")));
+    req.write(body);
+    req.end();
+  });
+}
+
+async function callGLM(system, user, { temperature = 0.1, max_tokens = 1024 } = {}) {
+  if (!ZHIPU_KEY) throw new Error('缺少智谱 API Key：请在项目目录创建 secret.json，内容为 {"ZHIPU_API_KEY": "你的key"}');
+  const body = JSON.stringify({
+    model: MODEL,
+    messages: [{ role: "system", content: system }, { role: "user", content: user }],
+    temperature, max_tokens,
+  });
+  const j = await postJSON(ZHIPU_URL, { "Authorization": "Bearer " + ZHIPU_KEY, "Content-Type": "application/json" }, body);
   if (j.error) throw new Error(j.error.message || "API error");
-  let raw = j.choices[0].message.content.trim();
-  raw = raw.replace(/^```(json)?\s*/i, "").replace(/```\s*$/, ""); // 容错：剥掉可能的代码块包裹
-  const start = raw.search(/[[{]/);
+  const raw = j.choices[0].message.content.trim();
+  return raw.replace(/^```(json)?\s*/i, "").replace(/```\s*$/, ""); // 容错：剥掉可能的代码块包裹
+}
+
+// ---------- LLM 职责 1：人话 -> 结构化（意图路由 + 记账解析） ----------
+async function parseLedger(text) {
+  const sys = `你是记账意图解析器，把用户输入解析成 JSON。只输出 JSON，不要任何解释、不要 markdown 代码块。今天是 ${todayStr()}。
+
+判断输入属于哪种意图，输出对应格式：
+
+一、记账（输入里出现了明确的消费金额）：输出支出数组，多笔支出拆成多条：
+[{"amount": 数字, "category": "类目", "note": "备注(≤10字)", "date": "YYYY-MM-DD"}]
+- 类目只能从这些里选：${CATEGORIES.join("、")}
+- "昨天""前天"要换算成真实日期；没提日期默认今天
+- 金额是人民币元；备注写消费内容本身（如"午饭"），不要包含金额
+- 没有明确金额就不算记账，走意图三
+
+二、调整预算（用户想修改某类目的预算金额）：
+{"setBudget": {"category": "类目", "amount": 数字}}
+
+三、其他一切情况（提问、闲聊、看不懂）：
+{"query": "用户原话"}`;
+  const raw = await callGLM(sys, text);
+  const start = raw.search(/[[{]/); // 容错：定位 JSON 起点
   return JSON.parse(raw.slice(start === -1 ? 0 : start));
 }
 
-// ---- 本地算账：预算反馈（不经过 AI） ----
-function monthKey(d) { return d.slice(0, 7); }
-function buildFeedback(txns, budgets, newTxns) {
-  const mk = monthKey(newTxns[0].date);
-  const spent = {};
-  for (const t of txns) if (monthKey(t.date) === mk) spent[t.category] = (spent[t.category] || 0) + t.amount;
+// ---------- LLM 职责 2：数据 -> 人话（数字先在本地算好，AI 只负责组织语言） ----------
+async function answerQuestion(text, d) {
+  const s = monthStats(d);
+  const recent = d.txns
+    .filter(t => monthKey(t.date) === s.month)
+    .sort((a, b) => b.id - a.id)
+    .slice(0, 12)
+    .map(t => `${t.date.slice(5)} ${t.category} ¥${t.amount}${t.note ? " " + t.note : ""}`);
+  const facts = [
+    `今天：${todayStr()}（本月还剩 ${s.daysLeft} 天）`,
+    `总预算 ¥${s.totalBudget}，本月已花 ¥${s.totalSpent}，剩余 ¥${s.totalLeft}`,
+    `日均支出 ¥${s.dailyAvg}，按此节奏月底预计花 ¥${s.projected}（${s.projectedDelta >= 0 ? "超支" : "结余"} ¥${Math.abs(s.projectedDelta)}）`,
+    `今日还可花 ¥${s.todayAllowance}`,
+    `各类目（预算/已花/按节奏月底预计）：` + s.catStats.map(c => `${c.category} ¥${c.budget}/¥${c.spent}/¥${c.projected}`).join("，"),
+    `最近流水：` + (recent.length ? recent.join("；") : "暂无"),
+  ].join("\n");
+  const sys = `你是记账助手"一句账"，基于用户提供的本月账目数据回答问题。规则：
+1. 只依据数据回答，禁止编造或猜测任何数字
+2. 需要计算时先想清楚再回答，简洁（80 字以内），金额写成 ¥xx
+3. 数据里没有的信息（比如其他月份）就直说暂时看不到
+4. 语气自然像朋友聊天，称呼"你"`;
+  return (await callGLM(sys, `${facts}\n\n用户问题：${text}`, { temperature: 0.3, max_tokens: 300 })).trim();
+}
+
+// ---------- 本地算账：记账后的即时预算冲击反馈 ----------
+function buildFeedback(d, newTxns) {
+  const spent = {}; // "YYYY-MM|类目" -> 已花
+  for (const t of d.txns) {
+    const k = monthKey(t.date) + "|" + t.category;
+    spent[k] = (spent[k] || 0) + t.amount;
+  }
   return newTxns.map(t => {
-    const budget = budgets[t.category] ?? 0;
-    const before = budget - (spent[t.category] || 0);
-    const after = before - t.amount;
+    const k = monthKey(t.date) + "|" + t.category;
+    const budget = Number(d.budgets[t.category] || 0);
+    spent[k] = (spent[k] || 0) + t.amount; // 顺序累计：同一次输入多笔同类也能算对
+    const after = budget - spent[k];
     const ratio = budget > 0 ? after / budget : 0;
-    let level, tip;
+    let level = "green", tip = "状态良好";
     if (after < 0) { level = "red"; tip = "已超支"; }
     else if (ratio < 0.2) { level = "amber"; tip = "快见底了"; }
-    else { level = "green"; tip = "状态良好"; }
-    // 体感换算：按剩余预算还能花几笔同额消费
     const times = t.amount > 0 ? Math.floor(Math.max(after, 0) / t.amount) : 0;
-    return { ...t, budgetLeft: Math.round(after * 100) / 100, level, tip, stillCanBuy: times };
+    return {
+      ...t,
+      budgetLeft: round2(after), level, tip, stillCanBuy: times,
+      impactPct: budget > 0 ? Math.round((t.amount / budget) * 100) : 0, // 这笔占该类目预算的百分比
+    };
   });
 }
 
+// ---------- HTTP ----------
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   const send = (code, obj) => { res.writeHead(code, { "Content-Type": "application/json; charset=utf-8" }); res.end(JSON.stringify(obj)); };
+  const readBody = async () => { let b = ""; for await (const c of req) b += c; return JSON.parse(b); };
 
   if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     return res.end(fs.readFileSync(path.join(__dirname, "public", "index.html")));
   }
 
+  // 本月全量状态：预算、统计、预测、流水（全部本地计算）
   if (url.pathname === "/api/state" && req.method === "GET") {
     const d = loadData();
-    const mk = new Date().toISOString().slice(0, 7);
-    const monthTxns = d.txns.filter(t => monthKey(t.date) === mk).sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
-    const catSpent = {};
-    for (const t of monthTxns) catSpent[t.category] = (catSpent[t.category] || 0) + t.amount;
-    return send(200, { budgets: d.budgets, categories: CATEGORIES, txns: monthTxns, catSpent, month: mk });
+    const s = monthStats(d);
+    const txns = d.txns.filter(t => monthKey(t.date) === s.month).sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
+    return send(200, { ...s, budgets: d.budgets, categories: CATEGORIES, txns });
   }
 
+  // 统一入口：一次 LLM 调用完成意图路由（记账 / 调预算 / 提问）
   if (url.pathname === "/api/record" && req.method === "POST") {
-    let body = "";
-    for await (const c of req) body += c;
-    const { text } = JSON.parse(body);
-    if (!text || !text.trim()) return send(400, { error: "empty input" });
     try {
+      const { text } = await readBody();
+      if (!text || !text.trim()) return send(400, { error: "empty input" });
       const parsed = await parseLedger(text.trim());
-      if (!Array.isArray(parsed)) return send(200, { type: "chat", echo: parsed });
       const d = loadData();
-      const newTxns = parsed.map(t => ({
-        id: Date.now() + Math.floor(Math.random() * 1000),
-        amount: Number(t.amount), category: t.category, note: t.note || "", date: t.date || new Date().toISOString().slice(0, 10),
-      })).filter(t => t.amount > 0 && CATEGORIES.includes(t.category));
-      if (!newTxns.length) return send(200, { type: "none" });
-      const feedback = buildFeedback(d.txns, d.budgets, newTxns);
-      d.txns.push(...newTxns);
-      saveData(d);
-      return send(200, { type: "ok", added: newTxns, feedback });
+
+      if (Array.isArray(parsed)) {
+        // 意图一：记账（LLM 输出过白名单校验，不可全信）
+        const newTxns = parsed.map(t => ({
+          id: Date.now() + Math.floor(Math.random() * 1000),
+          amount: Number(t.amount), category: t.category, note: t.note || "",
+          date: normalizeDate(t.date),
+        })).filter(t => t.amount > 0 && CATEGORIES.includes(t.category));
+        if (!newTxns.length) return send(200, { type: "none" });
+        const feedback = buildFeedback(d, newTxns);
+        d.txns.push(...newTxns);
+        saveData(d);
+        return send(200, { type: "ok", added: newTxns, feedback });
+      }
+
+      if (parsed && parsed.setBudget && CATEGORIES.includes(parsed.setBudget.category) && Number(parsed.setBudget.amount) > 0) {
+        // 意图二：调整预算
+        d.budgets[parsed.setBudget.category] = round2(Number(parsed.setBudget.amount));
+        saveData(d);
+        return send(200, { type: "budget", category: parsed.setBudget.category, amount: d.budgets[parsed.setBudget.category] });
+      }
+
+      // 意图三：提问 -> 本地聚合数据 + LLM 只组织语言
+      const answer = await answerQuestion(text.trim(), d);
+      return send(200, { type: "answer", answer });
     } catch (e) {
       return send(500, { error: e.message });
     }
   }
 
   if (url.pathname === "/api/budget" && req.method === "POST") {
-    let body = "";
-    for await (const c of req) body += c;
-    const { category, amount } = JSON.parse(body);
-    const d = loadData();
-    d.budgets[category] = Number(amount);
-    saveData(d);
-    return send(200, { ok: true });
+    try {
+      const { category, amount } = await readBody();
+      if (!CATEGORIES.includes(category)) return send(400, { error: "bad category" });
+      const d = loadData();
+      d.budgets[category] = round2(Number(amount));
+      saveData(d);
+      return send(200, { ok: true });
+    } catch (e) {
+      return send(500, { error: e.message });
+    }
   }
 
   if (url.pathname === "/api/delete" && req.method === "POST") {
-    let body = "";
-    for await (const c of req) body += c;
-    const { id } = JSON.parse(body);
-    const d = loadData();
-    d.txns = d.txns.filter(t => t.id !== id);
-    saveData(d);
-    return send(200, { ok: true });
+    try {
+      const { id } = await readBody();
+      const d = loadData();
+      d.txns = d.txns.filter(t => t.id !== id);
+      saveData(d);
+      return send(200, { ok: true });
+    } catch (e) {
+      return send(500, { error: e.message });
+    }
   }
 
   res.writeHead(404); res.end("not found");
 });
 
-server.listen(PORT, () => console.log(`AI 记账平台已启动: http://localhost:${PORT}`));
+// 端口被占时给出人话提示，而不是让用户面对一堆英文堆栈
+server.on("error", err => {
+  if (err.code === "EADDRINUSE") {
+    console.error(`[启动失败] 端口 ${PORT} 被旧进程占用。`);
+    console.error("解决：关掉旧的黑色窗口，重新双击「启动记账.bat」即可（新版启动脚本会自动清理旧进程）。");
+  } else {
+    console.error("[启动失败] " + err.message);
+  }
+  process.exit(1);
+});
+
+server.listen(PORT, () => console.log(`一句账 · AI 记账已启动: http://localhost:${PORT}  （Node ${process.versions.node}）`));
