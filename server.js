@@ -26,7 +26,7 @@ const ZHIPU_KEY = loadApiKey();
 const ZHIPU_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
 // 模型选择（你当前的智谱资源包都是 glm-4.5-air 专用，所以用它消耗赠送额度）
 // 想换其他模型时改这一行即可，例如：\"glm-5.3-flash\"（按量付费）或\"glm-4.7-flash\"（免费但繁忙）
-const MODEL = "glm-4.7-flash"; // 切换到免费模型（原 glm-5.3-flash 需付费）
+const MODEL = "glm-4.6v"; // 使用你的资源包对应的模型
 
 const CATEGORIES = ["餐饮", "交通", "购物", "娱乐", "居住", "医疗", "学习", "其他"];
 const DEFAULT_BUDGETS = { 餐饮: 2000, 交通: 500, 购物: 1500, 娱乐: 600, 居住: 3000, 医疗: 400, 学习: 300, 其他: 500 };
@@ -101,17 +101,33 @@ function monthStats(d) {
 // ---------- 智谱 GLM 调用 ----------
 // 兼容性：全局 fetch 要 Node 18+ 才有；检测不到时自动退回原生 https.request，保持零依赖
 function postJSON(url, headers, body) {
+  console.log('🔍 [DEBUG] 调用智谱API:', url);
+  console.log('🔍 [DEBUG] 请求头:', JSON.stringify(headers));
+  console.log('🔍 [DEBUG] 请求体长度:', body.length);
+  
   if (typeof fetch === "function") {
     const opts = { method: "POST", headers, body };
     let timer = null;
     if (typeof AbortController === "function") {
       const ac = new AbortController();
-      timer = setTimeout(() => ac.abort(), 30000);
+      timer = setTimeout(() => {
+        console.log('⏰ [DEBUG] 请求超时，取消请求');
+        ac.abort();
+      }, 60000); // 增加到60秒超时
       opts.signal = ac.signal;
     }
-    return fetch(url, opts).then(r => r.json())
+    
+    return fetch(url, opts)
+      .then(r => {
+        console.log('🔍 [DEBUG] HTTP响应状态:', r.status, r.statusText);
+        if (!r.ok) {
+          throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+        }
+        return r.json();
+      })
       .catch(e => {
         const msg = String((e && e.message) || e);
+        console.log('❌ [DEBUG] API调用失败:', msg);
         throw new Error(/abort/i.test(msg) ? "调用智谱 API 超时（30 秒无响应）" : "调用智谱 API 失败：" + msg);
       })
       .finally(() => { if (timer) clearTimeout(timer); });
@@ -131,23 +147,45 @@ function postJSON(url, headers, body) {
       });
     });
     req.on("error", reject);
-    req.setTimeout(30000, () => req.destroy(new Error("调用智谱 API 超时（30 秒无响应）")));
+    req.setTimeout(60000, () => req.destroy(new Error("调用智谱 API 超时（60 秒无响应）")));
     req.write(body);
     req.end();
   });
 }
 
-async function callGLM(system, user, { temperature = 0.1, max_tokens = 1024 } = {}) {
+async function callGLM(system, user, { temperature = 0.1, max_tokens = 1024 } = {}, retryCount = 0) {
   if (!ZHIPU_KEY) throw new Error('缺少智谱 API Key：请在项目目录创建 secret.json，内容为 {"ZHIPU_API_KEY": "你的key"}');
+  
+  console.log('🔑 [DEBUG] API Key有效性检查:', ZHIPU_KEY ? '已配置' : '未配置');
+  console.log('🔑 [DEBUG] 当前模型:', MODEL);
+  console.log('🔄 [DEBUG] 重试次数:', retryCount);
+  
   const body = JSON.stringify({
     model: MODEL,
     messages: [{ role: "system", content: system }, { role: "user", content: user }],
     temperature, max_tokens,
   });
-  const j = await postJSON(ZHIPU_URL, { "Authorization": "Bearer " + ZHIPU_KEY, "Content-Type": "application/json" }, body);
-  if (j.error) throw new Error(j.error.message || "API error");
-  const raw = j.choices[0].message.content.trim();
-  return raw.replace(/^```(json)?\s*/i, "").replace(/```\s*$/, ""); // 容错：剥掉可能的代码块包裹
+  
+  try {
+    const j = await postJSON(ZHIPU_URL, { "Authorization": "Bearer " + ZHIPU_KEY, "Content-Type": "application/json" }, body);
+    if (j.error) {
+      console.log('❌ [DEBUG] 智谱API错误:', JSON.stringify(j.error));
+      throw new Error(j.error.message || "API error");
+    }
+    const raw = j.choices[0].message.content.trim();
+    return raw.replace(/^```(json)?\s*/i, "").replace(/```\s*$/, ""); // 容错：剥掉可能的代码块包裹
+  } catch (error) {
+    console.log('❌ [DEBUG] API调用失败:', error.message);
+    
+    // 如果是超时错误且还有重试次数，则重试
+    if (retryCount < 2 && /timeout|abort/i.test(error.message)) {
+      console.log('⏳ [DEBUG] 准备重试，等待2秒...');
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      return callGLM(system, user, { temperature, max_tokens }, retryCount + 1);
+    }
+    
+    throw error;
+  }
 }
 
 // ---------- LLM 职责 1：人话 -> 结构化（意图路由 + 记账解析） ----------
@@ -234,6 +272,15 @@ const server = http.createServer(async (req, res) => {
   }
 
   // 本月全量状态：预算、统计、预测、流水（全部本地计算）
+  if (url.pathname === "/api/test" && req.method === "GET") {
+    return send(200, { 
+      status: "ok", 
+      message: "服务正常运行",
+      model: MODEL,
+      hasApiKey: !!ZHIPU_KEY
+    });
+  }
+
   if (url.pathname === "/api/state" && req.method === "GET") {
     const d = loadData();
     const s = monthStats(d);
@@ -274,6 +321,26 @@ const server = http.createServer(async (req, res) => {
       const answer = await answerQuestion(text.trim(), d);
       return send(200, { type: "answer", answer });
     } catch (e) {
+      console.log('❌ [ERROR] 处理请求时出错:', e.message);
+      
+      // 特殊处理智谱API的访问量过大错误
+      if (e.message.includes('访问量过大') || e.message.includes('当前访问量过大') || e.message.includes('该模型当前访问量过大')) {
+        return send(503, { 
+          error: '服务暂时不可用', 
+          message: '该模型当前访问量过大，请您稍后再试',
+          suggestion: '建议等待几分钟后重试，或切换到其他模型'
+        });
+      }
+      
+      // 特殊处理超时错误
+      if (e.message.includes('超时') || e.message.includes('timeout')) {
+        return send(504, { 
+          error: '请求超时', 
+          message: '智谱API响应超时，已自动重试，请稍后重试',
+          suggestion: '网络可能较慢，建议检查网络连接后重试'
+        });
+      }
+      
       return send(500, { error: e.message });
     }
   }
