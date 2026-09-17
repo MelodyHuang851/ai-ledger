@@ -1,0 +1,16 @@
+# 记账数据：不进版本库，避免 git reset --hard 等回滚操作误伤真实账本
+data.json
+
+# API 密钥：绝不提交
+secret.json
+
+# 个人笔记（本地保留，不上传）
+GIT-GUIDE.md
+git提交分析报告.md
+一句账优化处理点_0830_Meldoy.md
+智谱API模型配置问题解决_0831_Meldoy.md
+
+# 其他
+node_modules/
+*.log
+.DS_Store
